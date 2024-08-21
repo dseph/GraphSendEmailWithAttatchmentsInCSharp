@@ -1,0 +1,95 @@
+// GraphSendEmailWithAttatchmentsInCSharp
+//
+// This is a basic sample for sending attachments using Graph and C#.
+// This sample works with attachments over 3 megabytes.  if you are sending smaller attachments then you can use the sample from:
+//    https://learn.microsoft.com/en-us/graph/api/message-post-attachments?view=graph-rest-1.0&tabs=csharp
+//
+// References: 
+//    https://learn.microsoft.com/en-us/graph/sdks/sdks-overview
+//    https://learn.microsoft.com/en-us/graph/sdks/sdk-installation
+//    https://learn.microsoft.com/en-us/graph/sdks/create-client?tabs=csharp
+//    https://learn.microsoft.com/en-us/graph/api/message-post-attachments?view=graph-rest-1.0&tabs=csharp
+//
+// Note:  If you are sending a .txt file then do not include the ContentType.
+//
+
+using Microsoft.Graph;
+using Azure.Identity;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
+
+class Program
+{
+    static async Task Main(string[] args)
+    {
+        var tenantId = "your-tenant-id";
+        var clientId = "your-client-id";
+        var clientSecret = "your-client-secret";
+
+        var clientSecretCredential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+        var graphClient = new GraphServiceClient(clientSecretCredential);
+
+        // Create a draft message
+        var draftMessage = new Message
+        {
+            Subject = "Large attachment",
+            Body = new ItemBody
+            {
+                ContentType = BodyType.Text,
+                Content = "See the attached file."
+            },
+            ToRecipients = new List<Recipient>
+            {
+                new Recipient
+                {
+                    EmailAddress = new EmailAddress
+                    {
+                        Address = "recipient@example.com"
+                    }
+                }
+            }
+        };
+
+        var savedDraft = await graphClient.Me.Messages.Request().AddAsync(draftMessage);
+
+        // Create an upload session
+        var attachmentItem = new AttachmentItem
+        {
+            AttachmentType = AttachmentType.File,
+            Name = "largefile.txt",
+            Size = new FileInfo("path/to/largefile.txt").Length
+        };
+
+        var uploadSession = await graphClient.Me.Messages[savedDraft.Id].Attachments
+            .CreateUploadSession(attachmentItem)
+            .Request()
+            .PostAsync();
+
+        using var fileStream = File.OpenRead("path/to/largefile.txt");
+        var maxSliceSize = 320 * 1024; // 320 KB
+        var fileUploadTask = new LargeFileUploadTask<AttachmentItem>(uploadSession, fileStream, maxSliceSize, graphClient.RequestAdapter);
+
+        IProgress<long> progress = new Progress<long>(prog => {
+            Console.WriteLine($"Uploaded {prog} bytes of {fileStream.Length} bytes");
+        });
+
+        var uploadResult = await fileUploadTask.UploadAsync(progress);
+
+        if (uploadResult.UploadSucceeded)
+        {
+            Console.WriteLine($"Upload complete, item ID: {uploadResult.ItemResponse.Id}");
+        }
+        else
+        {
+            Console.WriteLine("Upload failed");
+        }
+
+        // Send the email
+        await graphClient.Me.Messages[savedDraft.Id]
+            .Send()
+            .Request()
+            .PostAsync();
+    }
+}
